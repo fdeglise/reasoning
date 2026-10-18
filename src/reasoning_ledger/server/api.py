@@ -22,6 +22,8 @@ from .bot_store import BotStore
 from .compute_api import install_routes as install_compute_routes
 from .compute_catalog import load_catalog
 from .compute_store import ComputeStore
+from .direct_messages import DirectMessages
+from .direct_messages import install_routes as install_direct_message_routes
 from .feedback_api import install_feedback_routes
 from .inference_store import InferenceStore
 from .inference_worker import DEFAULT_AGENT_CONCURRENCY, InferenceWorker
@@ -31,6 +33,7 @@ from .model_benchmarks import ModelBenchmarks, metadata_key
 from .model_recommendations import recommendations
 from .navigation_api import install_routes as install_navigation_routes
 from .openrouter import OPENROUTER_URL, OpenRouter, ProviderError, provider_origin
+from .references import install_routes as install_reference_routes
 from .request_input import RequestInput as Input
 from .research_api import install_routes as install_research_routes
 from .store import Store, StoreError
@@ -573,10 +576,14 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_work_routes(app, store, authenticated)
     install_work_jobs_routes(app, store, authenticated, provider)
     install_compute_routes(app, compute, authenticated)
-    from .bot_diagnostics import deployment_identity
+    from .bot_diagnostics import release_identity
+    from .migrations import MIGRATIONS
 
+    # Read once: the release is immutable for this process, so health never touches the manifest.
+    release = release_identity(config.frontend_dir, config.deployment_release)
+    started = time.monotonic()
     install_bot_routes(app, BotStore(store), authenticated, compute=compute,
-                       deployment=deployment_identity(config.frontend_dir, config.deployment_release))
+                       deployment={key: release[key] for key in ("release_id", "source_revision")})
     install_cloud_bot_routes(app, store, config, authenticated)
     install_webhook_routes(app, webhooks, authenticated, webhook_worker)
     install_workflow_routes(app, app.state.workflows, authenticated)
@@ -584,6 +591,8 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_usage_routes(app, usage, authenticated)
     install_feedback_routes(app, store, authenticated)
     install_navigation_routes(app, store, authenticated)
+    install_reference_routes(app, store, authenticated)
+    install_direct_message_routes(app, store, authenticated)
     install_topic_event_routes(app, topic_events, credentials)
 
     def session_response(result: dict, response: Response, transport: Transport) -> dict:
@@ -602,6 +611,11 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
             "status": "ok",
             "initialized": store.initialized(),
             **({"mail_worker_running": mail_worker.running} if config.mail is not None else {}),
+            "release_id": config.deployment_release,
+            "source_revision": release["source_revision"],
+            "source_modified": release["source_modified"],
+            "schema_version": len(MIGRATIONS),
+            "uptime_seconds": int(time.monotonic() - started),
         }
 
     @app.exception_handler(ProviderError)
@@ -676,7 +690,9 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
 
     @app.get("/api/organizations/{organization_id}/hierarchy")
     def hierarchy(organization_id: str, user: User):
-        return store.hierarchy(user, organization_id)
+        # The caller's own direct-conversation summaries share the navigation refresh; Store.hierarchy stays topic-only.
+        return {**store.hierarchy(user, organization_id),
+                "direct_conversations": DirectMessages(store).conversations(user, organization_id)}
 
     @app.post("/api/organizations/{organization_id}/projects", status_code=201)
     def project(organization_id: str, body: ProjectCreation, user: User):

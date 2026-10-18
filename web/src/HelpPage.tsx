@@ -1,6 +1,7 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import { TOPIC_COMMANDS } from "./TopicCommands";
 import { Fragment } from "react";
+import { ServerStatus } from "./ServerStatus";
 
 export function HelpPage({ onClose }: { onClose: () => void }) {
   return <section className="org-help-page" aria-label="Reasoning help"><header><h1>Help</h1><button onClick={onClose}>Back to chat</button></header>
@@ -8,6 +9,8 @@ export function HelpPage({ onClose }: { onClose: () => void }) {
     <p>Alpha topics are human conversations. Beta topics use your selected OpenRouter model or connected bot for research. Gamma topics compare models and run workflows or computations.</p>
     <p>The coordinator delegates narrow tasks to workers, critics, librarians, formalizers, and verifiers. Librarians find sources; critics check arguments; formalizers prepare Lean code. A model review is not a formal proof or a human check.</p>
     <p>Select the model and effort at the bottom right of the message box. Play starts or resumes work; stop fences new actions. A goal states an objective and acceptance criteria, and continues until achieved, stopped, blocked, or an explicit allowance is reached. Read the expandable system prompt above a beta conversation to inspect its instructions.</p>
+    <h2>Direct messages</h2>
+    <p>Click a name in People, or + beside Direct messages, to send a private message. Only the two participants can read it; administrators, search, exports, bots and models cannot. Unread messages are counted under Direct messages. Mute hides a conversation's count; Block stops the other person from messaging you until you unblock them.</p>
     <h2>Bots and permissions</h2>
     <p>Account menu → My bots manages personal bots. From a checkout, <code>make bot-connect</code> pairs a Codex or Claude Code bot and keeps it online. <code>make bot-doctor</code> checks its setup without inference; <code>make bot-run</code> restarts a paired runner. Private pairing state stays outside the checkout.</p>
     <p>Type @ to select a bot, or @Bot- to choose its advertised model. Bots follow their owner's access or exact topic grants. Context is scoped, not unrestricted organization memory. Local execution, shared compute, and GitHub issue publication require owner approval. Credentials never belong in chat.</p>
@@ -24,8 +27,9 @@ export function HelpPage({ onClose }: { onClose: () => void }) {
       <dt>?</dt><dd>Toggle help outside text fields</dd><dt>Enter / Shift+Enter</dt><dd>Send / new line</dd>
       <dt>Ctrl/⌘+K</dt><dd>Search</dd><dt>Ctrl/⌘+B</dt><dd>Toggle navigation</dd>
       <dt>Ctrl/⌘+Shift+P</dt><dd>Toggle people and bots</dd>
-      <dt>Alt+↑ / ↓</dt><dd>Previous / next topic</dd><dt>@ / /</dt><dd>Mention / commands</dd>
+      <dt>Alt+↑ / ↓</dt><dd>Previous / next topic</dd><dt>@ / # / /</dt><dd>Mention / reference / commands</dd>
       <dt>↑ / ↓ · Enter / Tab</dt><dd>Select autocomplete</dd><dt>Escape</dt><dd>Dismiss dialogs and menus</dd></dl>
     <h2>Slash commands</h2><dl className="org-shortcut-list">{TOPIC_COMMANDS.map(command => <Fragment key={command.id}><dt>/{command.id}</dt><dd>{command.label} · {command.kinds.join(" / ")}</dd></Fragment>)}</dl>
+    <ServerStatus />
   </section>;
 }

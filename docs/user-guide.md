@@ -2,6 +2,14 @@
 
 Open **?** at the right of the top bar for in-app help. Outside a text input,
 type `?` for keyboard shortcuts and slash commands.
+The bottom of the help page summarizes the server when you report a problem:
+the deployed commit as a short link to its source, the release ID prefix, server
+status (initialization, the mail worker when configured, database schema, and
+uptime), and when this was checked. The page checks once when it opens and again
+on **Refresh** or when the device reconnects; it does not poll. A server without
+a verified release manifest shows the commit as **development build** or
+**unknown** rather than a guess, and **with uncommitted changes** marks a release
+built from modified source. A failed check shows **Unavailable** with the reason.
 
 ## Conversations
 
@@ -15,8 +23,18 @@ search and person-specific favorites saved on the server across devices and
 organizations. Effort choices depend on the advertised
 model capabilities; default leaves the provider's effort unchanged.
 Markdown, code blocks, tables, and TeX render in messages. Raw HTML is not executed.
-The fork icon opens beta-topic forking and available message actions. Forked
-conversations have a captured history, not access to future origin messages.
+The fork icon opens the message actions: **Copy link**, and where allowed beta-topic
+forking, editing and version history. Forked conversations have a captured
+history, not access to future origin messages.
+
+A copied message link opens the topic at that message and highlights it, also in
+long topics and in another member's browser. The topic title menu's **Copy topic
+link** links to the whole topic. Type `#` in the message box to reference a topic
+or project you can open. A message stores the reference by identifier, so it
+shows the target's current name after a rename. Members who cannot open the
+target see *unavailable* instead of its name. A link to a removed or inaccessible
+message, topic or project opens with a notice instead. References also render in
+knowledge entries and the published research blog.
 
 If a beta reply request is sent but the server's answer is lost, the
 conversation shows **Reply request not confirmed**: the message is saved, and
@@ -24,6 +42,23 @@ the request may or may not have started. **Retry same request** resends it
 without creating a second request if the first was accepted. **Dismiss pending
 retry** only clears that retry from this browser; it does not stop an accepted
 reply or its charges. Use **Stop current work** to cancel running work.
+
+## Direct messages
+
+Click a person's name in **People** to send them a private message, or use `+`
+beside **Direct messages** in the left navigation to choose any member. The
+conversation opens in place of the topic. Your recipient finds it under **Direct
+messages** with an unread count, and can reply there. Only the two of you can read
+it: organization owners and administrators cannot, and it never appears in
+search, topic exports, shared knowledge, or bot and model context. Bots cannot be
+messaged or mentioned there. Viewers can receive and read direct messages but
+cannot start a conversation or reply.
+
+**Mute** hides a conversation's unread count. **Block** stops the other person
+from starting or continuing a conversation with you, and stops you from sending
+until you unblock them; they are told only that direct messages to you are
+unavailable. History stays readable to both of you and is retained like topic
+messages.
 
 ## Agents and bots
 
@@ -92,10 +127,11 @@ Record actual run IDs, tool outputs, and artifacts when reporting acceptance.
 
 Ctrl/⌘+B toggles navigation; Ctrl/⌘+Shift+P toggles people and bots;
 Ctrl/⌘+K searches; Alt+↑/↓ changes topics. `?` toggles help outside text fields.
-`@` and `/` open autocomplete; arrows and Enter/Tab select; Escape dismisses menus.
+`@` (people and bots), `#` (topics and projects) and `/` open autocomplete;
+arrows and Enter/Tab select; Escape dismisses menus.
 On a phone, **More topic actions** reveals the compact toolbar.
-Hover or keyboard-focus a message for reaction, fork/edit, and single-message
-copy controls. The upward triangle attaches a picture or PDF.
+Hover or keyboard-focus a message for reaction, message actions (copy link,
+fork, edit), and single-message copy controls. The upward triangle attaches a picture or PDF.
 
 Deleting a project or channel includes its children in one confirmation. Active
 work is cancelled, pending approvals revoked, and late effects fenced. Unknown
