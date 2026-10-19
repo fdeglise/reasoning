@@ -82,9 +82,12 @@ ordinary beta messages do not require a goal to use the agent harness.
 
 From a source checkout, run `make bot-connect` to pair and start a local Codex or
 Claude Code runner. Run `make bot-doctor` for read-only setup diagnostics, and
-`make bot-run` to restart a saved pairing. Only the bot's owner can invoke it unless
-the runner is started with `make bot-run BOT_ALLOW_OTHER_USERS=1`; another member's
-mention of an owner-only bot shows a bot activity explaining that it was not run.
+`make bot-run` to restart a saved pairing. Only the bot's owner can invoke it until
+the owner changes **Who can use this bot** in My bots to specific members or to
+everyone who can write in its topics; another member's request outside that setting
+shows a bot activity explaining that it was not run. Making sure you may share a bot,
+for example under your CLI subscription or API terms, is your responsibility;
+Reasoning does not check how a bot authenticates.
 The account menu's **My bots** controls access. Requests awaiting your approval appear as **!** beside the bot in **People**; click the
 bot's name or **!** to review the exact command, computation, or GitHub issue.
 Closing the dialog leaves the request pending. Type `@` for a bot, or `@Bot-` to select one of its
@@ -143,6 +146,11 @@ arrows and Enter/Tab select; Escape dismisses menus.
 On a phone, **More topic actions** reveals the compact toolbar.
 Hover or keyboard-focus a message for reaction, message actions (copy link,
 fork, edit), and single-message copy controls. The upward triangle attaches a picture or PDF.
+
+A private project is visible to its roster and to every organization owner and
+admin, who can also open its topics. If you see a project marked
+`private · visible to you as admin`, you are not on its roster and see it through your
+organization role; its settings list everyone who has access that way.
 
 Deleting a project or channel includes its children in one confirmation. Active
 work is cancelled, pending approvals revoked, and late effects fenced. Unknown
