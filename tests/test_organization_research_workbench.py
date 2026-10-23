@@ -266,6 +266,29 @@ def test_prompt_profiles_pin_exact_context_and_do_not_expand_tool_grants(install
     assert client.put(root + "/research-settings", json={"tools": [], "review_enabled": "yes"}).status_code == 422
 
 
+def test_automatic_ledger_context_contains_only_matching_records_with_an_explicit_limit(installation):
+    state, owner, topics, _, tools = source_run(installation)
+    org, topic, user = owner["organization_id"], topics[1]["id"], owner["user_id"]
+    for index in range(10):
+        tools.invoke("ledger_claim", {"statement": f"Tensor kernel example {index} has explicit hypotheses."})
+    tools.invoke("ledger_claim", {"statement": "An unrelated observation about prime numbers."})
+    message = state.store.post_message(user, org, topic, "Please explain the tensor kernel.", "tensor-question")
+
+    def compile_context():
+        with state.store.transaction() as db:
+            return ResearchContext(state.store).compile(db, org, topic, message["sequence"], QUOTES, user=user)[1]
+
+    snapshot = compile_context()
+    assert snapshot["ledger_context_limit"] == 8 and len(snapshot["ledger_revisions"]) == 8
+    # Change the persisted topic policy through the authenticated API.
+    _, _, client, _ = installation
+    root = f"/api/organizations/{org}/topics/{topic}"
+    for limit in (0, 2):
+        client.put(root + "/research-settings", json={"tools": sorted(tools.enabled), "ledger_context_limit": limit}).raise_for_status()
+        assert len(compile_context()["ledger_revisions"]) == limit
+    assert client.put(root + "/research-settings", json={"tools": [], "ledger_context_limit": 21}).status_code == 422
+
+
 def test_citation_cannot_pass_without_an_actual_source_read(installation):
     state, owner, topics, row, tools = source_run(installation)
     reference = tools.invoke("ledger_reference", {"author": "Example Author", "title": "A source", "url": "https://example.com/paper"})[
@@ -282,6 +305,19 @@ def test_citation_cannot_pass_without_an_actual_source_read(installation):
     ResearchAgent(state, fixture.provider, child, Quote(**json.loads(child["quote_json"]))).execute()
     reviews = ResearchReviews(state).list(owner["user_id"], owner["organization_id"], topics[1]["id"])
     assert reviews[0]["result"]["verdict"]["verdict"] == "inconclusive", reviews
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("status,text,expected", [("unavailable", "", False), ("failed", "", False),
+                                                 ("partial", "One readable page", False), ("ready", "", False),
+                                                 ("ready", "The exact source text", True)])
+def test_unreadable_or_partial_pdf_receipt_cannot_attest_full_source_access(nested, status, text, expected):
+    from reasoning_ledger.server.research_reviews import completed_source_evidence
+
+    result = {"text": text, "extraction": {"status": status}}
+    receipt = {"name": "tool_call" if nested else "web_fetch", "arguments_json": json.dumps({"name": "web_fetch"}),
+               "result_json": json.dumps({"result": result} if nested else result)}
+    assert completed_source_evidence(receipt) is expected
 
 
 def test_artifact_edits_have_compare_and_set_and_retained_revisions(installation):

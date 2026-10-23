@@ -109,7 +109,7 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
     await page.keyboard.press('Enter');
     await page.locator('.org-message').filter({ hasText: 'Simulated development response.' }).waitFor({ timeout: 20000 });
     await page.getByText('System prompt', { exact: true }).click();
-    await page.getByText(/Agentic work is the default for ordinary messages/).waitFor();
+    await page.getByText(/Ordinary questions and discussion need a useful reply/).waitFor();
     await page.waitForTimeout(2200); // Polling must not pull an expanded prompt out of view.
     assert.ok(await page.getByText('System prompt', { exact: true }).isVisible());
     const history = page.getByLabel('Message history', { exact: true });
@@ -148,7 +148,7 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
       return data;
     };
     const beta = await copyTopic('beta');
-    assert.ok(beta.current_instructions.system_prompt.includes('Agentic work is the default for ordinary messages'));
+    assert.ok(beta.current_instructions.system_prompt.includes('Ordinary questions and discussion need a useful reply'));
     await page.getByRole('button', { name: 'Copy topic JSON', exact: true }).click({ modifiers: ['Shift'] });
     await page.locator('.org-copy-topic[data-copied="true"]').waitFor();
     const trace = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
