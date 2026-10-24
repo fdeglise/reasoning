@@ -26,6 +26,7 @@ from .direct_media import install_routes as install_direct_media_routes
 from .direct_messages import DirectMessages
 from .direct_messages import install_routes as install_direct_message_routes
 from .feedback_api import install_feedback_routes
+from .feedback_reports import install_routes as install_feedback_report_routes
 from .inference_store import InferenceStore
 from .inference_worker import DEFAULT_AGENT_CONCURRENCY, InferenceWorker
 from .knowledge_store import KnowledgeStore
@@ -601,6 +602,7 @@ def create_app(config: Config, *, provider: OpenRouter | None = None, mail_provi
     install_reply_routes(app, store, authenticated)
     install_direct_message_routes(app, store, authenticated)
     install_direct_media_routes(app, store, authenticated)
+    install_feedback_report_routes(app, store, authenticated, config.deployment_release)
     install_topic_event_routes(app, topic_events, credentials)
 
     def session_response(result: dict, response: Response, transport: Transport) -> dict:
