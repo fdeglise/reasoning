@@ -70,7 +70,7 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
     assert.equal(await page.getByRole('button', { name: /Pin.*research context/i }).count(), 0);
     assert.equal(await page.locator('.org-composer').getByRole('button', { name: 'Ledger', exact: true }).count(), 0);
     await page.getByLabel('Topic playback', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('Topic playback', { exact: true }).getByRole('button').count(), 2);
+    assert.equal(await page.getByLabel('Topic playback', { exact: true }).getByRole('button').count(), 1, 'one button in the box');
     await page.getByRole('button', { name: 'Toggle project navigation' }).click();
     assert.equal(await page.getByRole('navigation', { name: 'Projects and channels' }).isVisible(), false);
     await page.getByRole('button', { name: 'Toggle project navigation' }).click();
@@ -108,10 +108,16 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
     assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).evaluate(element => element === document.activeElement), true);
     await page.keyboard.press('Enter');
     await page.locator('.org-message').filter({ hasText: 'Simulated development response.' }).waitFor({ timeout: 20000 });
-    await page.getByText('System prompt', { exact: true }).click();
+    // The system prompt opens from the topic's details card in the top bar, in a dialog; the card shows its version.
+    const systemPrompt = async () => {
+      await page.locator('.org-topic-menu > summary').click();
+      await page.getByRole('group', { name: 'Topic details', exact: true }).getByRole('button', { name: /^System prompt v\d+$/ }).click();
+    };
+    await systemPrompt();
     await page.getByText(/Ordinary questions and discussion need a useful reply/).waitFor();
-    await page.waitForTimeout(2200); // Polling must not pull an expanded prompt out of view.
-    assert.ok(await page.getByText('System prompt', { exact: true }).isVisible());
+    await page.waitForTimeout(2200); // Polling must not close or replace the open dialog.
+    assert.ok(await page.getByRole('dialog', { name: 'System prompt', exact: true }).locator('.org-system-message').isVisible());
+    await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
     const history = page.getByLabel('Message history', { exact: true });
     // A short transcript can fit after prompt expansion. The jump control is
     // intentionally absent at the bottom; establish a real scrolled state
@@ -120,18 +126,16 @@ test('local hot-reload workflow signs in, streams a simulated beta answer, and c
       await history.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll', { bubbles: true })); });
       await page.getByRole('button', { name: 'Jump to newest message' }).click();
     }
-    await page.getByText('System prompt', { exact: true }).click();
     await command('tools');
     assert.equal(await page.getByLabel('Fresh-context review', { exact: true }).isChecked(), true);
     assert.ok(await page.getByRole('button', { name: 'Reviewer override', exact: true }).filter({ hasText: 'Automatic reviewer' }).isVisible());
     await page.getByLabel('Research strategy', { exact: true }).selectOption('blueprint');
     await page.getByLabel('Additional research instructions', { exact: true }).fill('Keep the test hypotheses exact.');
     await page.getByRole('button', { name: 'Save tools', exact: true }).click();
-    await page.getByText('System prompt', { exact: true }).click();
+    await systemPrompt();
     await page.getByText(/Maintain one evolving proof blueprint/).waitFor();
     await page.locator('.org-system-message').getByText(/Keep the test hypotheses exact/).waitFor();
-    await page.getByText('System prompt', { exact: true }).click();
-    await page.getByLabel('Close research panel', { exact: true }).click();
+    await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     const copyTopic = async kind => {
       await page.getByRole('button', { name: 'Copy topic JSON', exact: true }).click();

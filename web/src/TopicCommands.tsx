@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { ReturnIcon, StopIcon } from "./ComposerIcons";
 import { ActivityDialog } from "./TopicActivity";
 import "./topic-commands.css";
 
@@ -91,12 +92,18 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       <dt><code>/{command.id}</code></dt><dd>{command.label} <small>· {command.kinds.join(" / ")}</small></dd></React.Fragment>)}</dl>
   </ActivityDialog>;
 }
+/**
+ * The composer's one button for a topic's work: Stop while work runs; otherwise, with an empty box, the return symbol starts or
+ * resumes work, and is grey when there is nothing to start. With text in the box the composer's send button takes its place.
+ */
 export function TransportControls({ canPlay, canStop, onPlay, onStop, hidePlay = false, playLabel = "Start or resume", stopLabel = "Stop current work", playTitle }: {
   canPlay: boolean; canStop: boolean; onPlay: () => void; onStop?: () => void; hidePlay?: boolean; playLabel?: string; stopLabel?: string;
   playTitle?: string;
 }) {
-  return <span className="org-transport-controls" aria-label="Topic playback">
-    {!hidePlay && <button type="button" aria-label={playLabel} title={playTitle ?? playLabel} disabled={!canPlay} onClick={onPlay}>▶</button>}
-    {onStop && <button type="button" aria-label={stopLabel} title={stopLabel} disabled={!canStop} onClick={onStop}>■</button>}
+  const stopping = !!onStop && canStop;
+  if (hidePlay && !stopping) return null;
+  return <span className="org-transport-controls" aria-label="Topic playback" data-stopping={stopping || undefined}>
+    {stopping ? <button type="button" className="org-composer-button" aria-label={stopLabel} title={stopLabel} onClick={onStop}><StopIcon /></button>
+      : <button type="button" className="org-composer-button" aria-label={playLabel} title={playTitle ?? playLabel} disabled={!canPlay} onClick={onPlay}><ReturnIcon /></button>}
   </span>;
 }

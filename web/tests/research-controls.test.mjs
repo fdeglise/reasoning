@@ -67,11 +67,25 @@ test("a closed reply menu shows its selection without mounting model options", (
   assert.doesNotMatch(menu, /org-model-options|org-model-card|Search models and routers|r\/other|Cited memory/);
 });
 
+test("the selected model's capabilities open from an ⓘ beside the model picker", () => {
+  const readers = [["Public source reader", true], ["Literature readers (arXiv)", true], ["General web search", false]];
+  const closed = renderToStaticMarkup(React.createElement(controls.ModelCapabilities, {
+    model: "test/model", summary: "Research · 2 of 3 readers", date: "2026-10-23", readers }));
+  assert.match(closed, /aria-label="Model details"[^>]*aria-expanded="false"[^>]*>i<\/button>/);
+  assert.doesNotMatch(closed, /General web search|Research · 2 of 3/, "details stay closed until the ⓘ is clicked");
+});
+
 test("system prompt is a chat-styled disclosure and JSON copy is a quiet header icon", () => {
   const html = renderToStaticMarkup(React.createElement(controls.ResearchInstructions, {
     instructions: { system_prompt: "Exact **instruction** text <script>unsafe</script>", prompt_version: "test-version" }, loading: false,
   }));
   assert.match(html, /<summary>System prompt<\/summary>/);
+  const bare = renderToStaticMarkup(React.createElement(controls.ResearchInstructions, {
+    instructions: { system_prompt: "Exact text", prompt_version: "topic-agents-v9" }, loading: false, bare: true,
+  }));
+  assert.doesNotMatch(bare, /<summary>/, "the System prompt dialog supplies the heading");
+  assert.equal(controls.shortVersion("topic-agents-v9"), "v9");
+  assert.equal(controls.shortVersion("custom"), "custom");
   assert.match(html, /org-message org-system-message/);
   assert.match(html, /Exact <strong>instruction<\/strong> text/); assert.doesNotMatch(html, /<script>/);
   const copy = renderToStaticMarkup(React.createElement(TopicCopyButton, { organizationId: "org", topicId: "topic", onAuthLost: () => {} }));

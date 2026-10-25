@@ -27,13 +27,14 @@ import { ComputeAttempt } from "./compute-api";
 import { MessageUsageDetails } from "./MessageUsageDetails";
 import { normalizeMathDelimiters } from "./markdownMath";
 import { catalogModel, modelOptionGroups } from "./modelRecommendations";
-import { ModelPicker, compactTokens } from "./ModelBrowser";
+import { EffortPicker, ModelPicker, compactTokens } from "./ModelBrowser";
 import { ResearchControls, RESEARCH_TOOLS, ResearchTool, TOOL_LABELS, goalCommand } from "./ResearchControls";
 import { TopicCopyButton, TopicSystemPrompt } from "./TopicDiagnostics";
 import { NavigationUsage, readNavigation, saveNavigation, Spend } from "./navigationState";
 import { ThemeToggle } from "./ThemeToggle";
 import { ShortcutsHelp, SlashCommandPalette, TOPIC_COMMANDS, TopicCommand, dispatchTopicCommand, useTopicCommand } from "./TopicCommands";
 import { AttachmentButton, MarkdownMedia, MediaScope } from "./TopicMedia";
+import { ReturnIcon } from "./ComposerIcons";
 import { TexRequestDialog, texRequest } from "./TexRequestDialog";
 import { EmailVerification, VerifyEmailBanner } from "./EmailVerification";
 import { BatchInvitations, InvitationDeliveryProgress } from "./BatchInvitations";
@@ -119,8 +120,14 @@ export function alphaMessageGroups(messages: Message[]): Message[][] {
   return groups;
 }
 
-export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettings, onCopyLink }: {
+/**
+ * The topic name in the top bar. Clicking it opens the topic's details, like a direct conversation's: the topic and its
+ * channel, then for AI chats its research capabilities, System prompt, Research account and Project files (placed into
+ * `researchSlot` by the conversation), then Follow, Copy topic link and Topic settings.
+ */
+export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettings, onCopyLink, researchSlot }: {
   channel?: Channel; topic: Topic; subscribed: boolean; onFollow: () => void; onSettings?: () => void; onCopyLink?: () => void;
+  researchSlot?: (element: HTMLDivElement | null) => void;
 }) {
   const menu = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -131,15 +138,24 @@ export function TopicBreadcrumb({ channel, topic, subscribed, onFollow, onSettin
     document.addEventListener("pointerdown", close); document.addEventListener("keydown", close);
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", close); };
   }, []);
+  const choose = (action: () => void) => { action(); if (menu.current) menu.current.open = false; };
   return <nav className="org-current-topic" aria-label="Current topic">
     <span title={channel?.name}>#{channel?.name}</span><span aria-hidden="true">›</span>
     <details className="org-topic-menu" ref={menu}>
-      <summary title={topic.name}><h1><span className="org-kind">{KIND_SYMBOL[topic.kind]}</span>-{topic.name}</h1></summary>
-      <div className="org-topic-menu-options">
-        <button type="button" onClick={() => { onFollow(); if (menu.current) menu.current.open = false; }}>
-          {subscribed ? "Unfollow topic" : "Follow topic"}</button>
-        {onCopyLink && <button type="button" onClick={() => { onCopyLink(); if (menu.current) menu.current.open = false; }}>Copy topic link</button>}
-        {onSettings && <button type="button" onClick={() => { onSettings(); if (menu.current) menu.current.open = false; }}>Topic settings</button>}
+      <summary title={topic.name}><h1><span className="org-kind">{KIND_SYMBOL[topic.kind]}</span>-{topic.name}</h1>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></summary>
+      <div className="org-topic-menu-options org-topic-card" role="group" aria-label="Topic details">
+        <header><strong><span className="org-kind">{KIND_SYMBOL[topic.kind]}</span>-{topic.name}</strong>
+          <small>{KIND_LABEL[topic.kind]}{channel ? ` · #${channel.name}` : ""}</small></header>
+        <div className="org-topic-card-research" ref={researchSlot} />
+        <div className="org-topic-card-actions">
+          <button type="button" role="switch" aria-checked={subscribed} className="org-topic-card-row" onClick={onFollow}>
+            <span className="org-account-mark" aria-hidden="true">♪</span><span>Follow topic</span><span className="org-topic-switch" aria-hidden="true" /></button>
+          {onCopyLink && <button type="button" className="org-topic-card-row" onClick={() => choose(onCopyLink)}>
+            <span className="org-account-mark" aria-hidden="true">⧉</span>Copy topic link</button>}
+          {onSettings && <button type="button" className="org-topic-card-row" onClick={() => choose(onSettings)}>
+            <span className="org-account-mark" aria-hidden="true">⚙{"\uFE0E"}</span>Topic settings</button>}
+        </div>
       </div>
     </details>
   </nav>;
@@ -670,11 +686,13 @@ function PresenceSidebar({ organizationId, open, onClose, onAuthLost, userId, on
   </aside>;
 }
 
-function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, anchor, focus, referenceTargets = [], onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
+function Conversation({ organizationId, topic, members, user, canWrite, canManage, draft, updateDraft, anchor, focus, referenceTargets = [], menuTarget = null, onPreference, onForked, onAuthLost, modelAttempt, onModelAttempt, computeAttempt, onComputeAttempt, workflowAttempt, onWorkflowAttempt, workflowExecutionAttempt, onWorkflowExecutionAttempt }: {
   organizationId: string; topic: Topic; members: Member[]; user: Account; canWrite: boolean; canManage: boolean;
   draft: Draft; updateDraft: (draft: Draft) => void; anchor: number | null;
   /** A linked message: the conversation opens around it, scrolls to it and highlights it. */
   focus?: string;
+  /** The topic details card in the top bar, where research items appear. */
+  menuTarget?: HTMLElement | null;
   /** Topics and projects the writer can reference with `#`. */
   referenceTargets?: ReferenceCandidate[];
   onPreference: () => void; onAuthLost: () => void;
@@ -733,6 +751,9 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
   const [modelError, setModelError] = useState("");
   const [goalDraft, setGoalDraft] = useState<string | null>(null);
   const [composerTools, setComposerTools] = useState<HTMLDivElement | null>(null);
+  // In the message box, right of the text: the topic's start, resume or stop button. Under it, beside the model: the ⓘ.
+  const [composerButton, setComposerButton] = useState<HTMLDivElement | null>(null);
+  const [capabilitiesSlot, setCapabilitiesSlot] = useState<HTMLSpanElement | null>(null);
   const [workflowActivity, setWorkflowActivity] = useState<TopicActivity[]>([]), [computeActivity, setComputeActivity] = useState<TopicActivity[]>([]);
   const [betaActivity, setBetaActivity] = useState<TopicActivity[]>([]);
   const [botActivity, setBotActivity] = useState<TopicActivity[]>([]);
@@ -1132,6 +1153,15 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           }} onAuthLost={onAuthLost} />
       </article>)}</div></> }));
   }, [messages, reactions, workflowRunKey, topic.kind, topic.id, mentionPeople, tones, members, user.id, organizationId, canWrite, canReplyAgain, onAuthLost, focus, highlighted]);
+  // The plus sits under the box beside the model picker in AI chats, and inside the box on its left everywhere else.
+  const attach = <span ref={attachmentControl} className="org-composer-attach"><AttachmentButton organizationId={organizationId} topicId={topic.id}
+    disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onError={cause => {
+      if (cause instanceof ApiError && cause.status === 401) onAuthLost();
+    }} onInsert={markdown => {
+      const previous = currentDraft.current, text = previous.text + (previous.text ? "\n\n" : "") + markdown;
+      updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, mentions: previous.mentions });
+      requestAnimationFrame(() => textarea.current?.focus());
+    }} /></span>;
   return <MediaScope.Provider value={{ organizationId, topicId: topic.id, canWrite }}><section className="org-conversation" aria-label="Topic conversation">
     {texOpen && <TexRequestDialog bots={botModels} names={botNames} onClose={() => setTexOpen(false)} onPrepare={(source, bot) => {
       const label = `@${botNames[bot.bot_id] ?? bot.name}`;
@@ -1153,15 +1183,13 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       const view = viewport.current;
       if (view) { bottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < 64; setAtBottom(bottom.current); }
     }}>
-      {topic.kind === "beta" && <TopicSystemPrompt organizationId={organizationId} topicId={topic.id} onAuthLost={onAuthLost} revision={promptRevision}
-        onInspect={() => { bottom.current = false; setAtBottom(false); }} />}
       {older && messages.length > 0 && <button className="org-older" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? "Loading…" : "Load earlier messages"}</button>}
       {loading && <p role="status" className="org-empty">Loading conversation…</p>}
       {!loading && messages.length === 0 && topic.kind !== "gamma" && <div className="org-empty"><h2>Start the conversation</h2><p>{canWrite ? "Write the first message below." : "Messages will appear here."}</p></div>}
       {orderedActivity([...messageActivity, ...workflowActivity, ...computeActivity, ...betaActivity, ...botActivity])
         .map(item => <div key={item.id} data-activity-id={item.id}>{item.body}</div>)}
       {topic.kind === "beta" && <BetaConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
-        canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerTools} hidePlay={Boolean(draft.text.trim())}
+        canWrite={canWrite} canManage={canManage} online={online} toolbarTarget={composerButton} hidePlay={Boolean(draft.text.trim())}
         attempt={modelAttempt} onAttempt={onModelAttempt} onAuthLost={onAuthLost} onActivity={setBetaActivity} wake={messages.at(-1)?.sequence}
         transcript={transcript} onReplyPending={refreshMessages} />}
       <BotConversation organizationId={organizationId} topicId={topic.id} names={botNames} userId={user.id}
@@ -1175,7 +1203,8 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
     {!online && <p role="status" className="org-reconnecting">Reconnecting…</p>}
     {error && <p role="alert" className="org-error org-conversation-error">{error}</p>}
     {topic.kind === "beta" && <ResearchControls organizationId={organizationId} topicId={topic.id} userId={user.id}
-      toolbarTarget={composerTools} catalog={replyCatalog} allowedModels={replyConfiguration?.allowed_models ?? []}
+      toolbarTarget={composerTools} menuTarget={menuTarget} capabilitiesTarget={capabilitiesSlot}
+      instructions={<TopicSystemPrompt organizationId={organizationId} topicId={topic.id} onAuthLost={onAuthLost} revision={promptRevision} bare />} catalog={replyCatalog} allowedModels={replyConfiguration?.allowed_models ?? []}
       selectedEffort={selectedEffort}
       selectedModel={selectedModel} canWrite={canWrite} canManage={canManage} online={online} goalDraft={goalDraft}
       onGoalDraftDone={() => setGoalDraft(null)} onGoalStarted={(objective) => {
@@ -1187,15 +1216,16 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
       }} onSettingsChanged={() => setPromptRevision(value => value + 1)} onAuthLost={onAuthLost} />}
       {topic.kind === "gamma" && <WorkflowConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} attempt={workflowAttempt} onAttempt={onWorkflowAttempt}
-        executionAttempt={workflowExecutionAttempt} onExecutionAttempt={onWorkflowExecutionAttempt} onAuthLost={onAuthLost} toolbarTarget={composerTools}
+        executionAttempt={workflowExecutionAttempt} onExecutionAttempt={onWorkflowExecutionAttempt} onAuthLost={onAuthLost} toolbarTarget={composerButton}
         hidePlay={Boolean(draft.text.trim())} onActivity={setWorkflowActivity} />}
       {topic.kind !== "alpha" && <ComputeConversation organizationId={organizationId} topicId={topic.id} userId={user.id}
         canWrite={canWrite} canManage={canManage} attempt={computeAttempt} onAttempt={onComputeAttempt} onAuthLost={onAuthLost} toolbarTarget={composerTools} onActivity={setComputeActivity} />}
     <form className="org-composer" onSubmit={(event) => void send(event)}>
       <SlashCommandPalette topicId={topic.id} kind={topic.kind} text={draft.text} onSelect={chooseCommand} />
+      <div className="org-composer-box">
       {draft.replyTo && <ReplyBar original={replyOriginal} label={replyOriginal && authorLabel(replyOriginal, members)} onCancel={cancelReply} />}
       <label className="org-visually-hidden" htmlFor="org-message">Message</label>
-      <div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
+      <div className="org-composer-row">{topic.kind !== "beta" && attach}<div className="org-composer-input"><MentionMirror ref={mirror} text={draft.text} bindings={draft.mentions} self={user.id} />
       <textarea id="org-message" ref={textarea} onScroll={event => { if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={!canWrite ? "You have read-only access" : topic.kind === "beta" && modelAttempt
         ? modelAttempt.unconfirmed ? "Retry or dismiss the unconfirmed reply request before sending another message"
           : "Sending the reply request…" : topic.kind === "beta" && selectedModel
@@ -1234,28 +1264,25 @@ function Conversation({ organizationId, topic, members, user, canWrite, canManag
           }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); setMention(null); setReference(null); void send(); }
         }} /></div>
-      <div className="org-composer-controls">
-        <div className="org-composer-actions">
-        {(topic.kind === "alpha" || draft.text.trim()) && <button className="org-primary org-send-play"
-          aria-label={sending ? "Sending…" : draft.attempted ? "Retry send" : "Send"} title={draft.attempted ? "Retry send" : "Send message"}
-          disabled={!canWrite || sending || !online || !draft.text.trim() || (topic.kind === "beta" && !!modelAttempt)}>
-          <span aria-hidden="true">{sending ? "…" : "▶"}</span></button>}
-        {topic.kind !== "alpha" && <div className="org-composer-tools" ref={setComposerTools} />}
-        <span ref={attachmentControl}><AttachmentButton organizationId={organizationId} topicId={topic.id}
-          disabled={!canWrite || sending || (topic.kind === "beta" && !!modelAttempt)} onError={cause => {
-            if (cause instanceof ApiError && cause.status === 401) onAuthLost();
-          }} onInsert={markdown => {
-            const previous = currentDraft.current, text = previous.text + (previous.text ? "\n\n" : "") + markdown;
-            updateDraft({ text, clientId: crypto.randomUUID(), attempted: false, mentions: previous.mentions });
-            requestAnimationFrame(() => textarea.current?.focus());
-          }} /></span>
-        </div>
-        <div className="org-composer-model">
-        {topic.kind === "beta" && <BetaModelMenu configuration={replyConfiguration} catalog={replyCatalog} selected={selectedModel} tools={topic.knowledge_tools}
-          disabled={sending || !!modelAttempt} error={selectedModel.startsWith("bot/") ? "" : modelError} onSelect={setSelectedModel}
-          effort={effort} onEffortChange={chooseEffort} />}
-        </div>
+        {/* One button: the return symbol is grey with an empty box and active with text; while work runs it is Stop. */}
+        <div className="org-composer-send">
+          {(topic.kind === "alpha" || draft.text.trim()) && <button className="org-composer-button org-send-play"
+            aria-label={sending ? "Sending…" : draft.attempted ? "Retry send" : "Send"} title={draft.attempted ? "Retry send" : "Send message"}
+            disabled={!canWrite || sending || !online || !draft.text.trim() || (topic.kind === "beta" && !!modelAttempt)}>
+            {sending ? <span aria-hidden="true">…</span> : <ReturnIcon />}</button>}
+          {topic.kind !== "alpha" && <div className="org-composer-transport" ref={setComposerButton} />}
+        </div></div>
       </div>
+      {topic.kind === "beta" && <div className="org-composer-controls">
+        {attach}
+        <div className="org-composer-tools" ref={setComposerTools} />
+        <div className="org-composer-model">
+          <span className="org-composer-capabilities" ref={setCapabilitiesSlot} />
+          <BetaModelMenu configuration={replyConfiguration} catalog={replyCatalog} selected={selectedModel} tools={topic.knowledge_tools}
+            disabled={sending || !!modelAttempt} error={selectedModel.startsWith("bot/") ? "" : modelError} onSelect={setSelectedModel} />
+          <EffortPicker model={selectedModel} catalog={replyCatalog} effort={effort} disabled={sending || !!modelAttempt} onSelect={chooseEffort} />
+        </div>
+      </div>}
       {mentionMembers.length > 0 && <div id="org-mention-list" role="listbox" className="org-mention-menu" aria-label="Mention a member">
         {mentionMembers.map((member, index) => <button type="button" role="option" tabIndex={-1} id={"org-mention-" + (member.optionId ?? member.id)}
           aria-selected={index === mentionIndex % mentionMembers.length} key={member.optionId ?? member.id}
@@ -1439,6 +1466,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
   const [tool, setTool] = useState<"knowledge" | "prices" | "usage" | "bots" | null>(pairCode ? "bots" : null);
   const [knowledgeView, setKnowledgeView] = useState<KnowledgeView | null>(["ledger", "bibliography", "journal"].includes(workspace.view ?? "") ? workspace.view as KnowledgeView : null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [topicMenuSlot, setTopicMenuSlot] = useState<HTMLDivElement | null>(null);
   const [directJump, setDirectJump] = useState<MessageJump | null>(null);
   const [helpOpen, setHelpOpen] = useState(() => new URLSearchParams(window.location.search).get("view") === "help");
   useEffect(() => {
@@ -1710,7 +1738,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
       {knowledgeView ? <h1 className="org-workspace-title">{knowledgeView === "journal" ? "Research blog editor" : knowledgeView === "ledger" ? "Ledger" : "Bibliography"}</h1>
         : directConversation && organization ? <DirectTitle key={directConversation.id} organizationId={organization.id} conversation={directConversation} members={members}
           userId={user.id} onChanged={preferenceRefresh} onAuthLost={authLost} onShowMessage={target => setDirectJump(previous => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))} />
-        : organization && topic && <TopicBreadcrumb channel={channel} topic={topic}
+        : organization && topic && <TopicBreadcrumb channel={channel} topic={topic} researchSlot={setTopicMenuSlot}
         subscribed={hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed !== false}
         onFollow={() => void request(topicPath(organization.id, topic.id) + "/subscription", { method: "PUT", body: {
           subscribed: hierarchy.topic_state.find((item) => item.topic_id === topic.id)?.subscribed === false,
@@ -1784,7 +1812,7 @@ export function OrganizationApp({ user, onAccount, onAuthenticated, onSignedOut,
           organizationId={organization.id} conversation={directConversation} user={user} members={members} canWrite={canCreate}
           jump={directJump?.conversation === directConversation.id ? directJump : undefined}
           onChanged={preferenceRefresh} onAuthLost={authLost} /></LazyView> : organization && topic ? <Conversation key={organization.id + "/" + topic.id + "/" + selection?.anchor + "/" + (selection?.message ?? "")} organizationId={organization.id} topic={topic} members={members} user={user}
-          focus={selection?.message} referenceTargets={referenceTargets}
+          focus={selection?.message} referenceTargets={referenceTargets} menuTarget={topicMenuSlot}
           canWrite={canWriteSelected} canManage={["owner", "admin"].includes(organization.role)} draft={draft}
           modelAttempt={modelAttempts[draftKey]} onModelAttempt={(value) => setModelAttempts((existing) => ({ ...existing, [draftKey]: value }))}
           computeAttempt={computeAttempts[draftKey]} onComputeAttempt={(value) => setComputeAttempts((existing) => ({ ...existing, [draftKey]: value }))}

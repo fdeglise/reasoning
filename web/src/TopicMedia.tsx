@@ -1,5 +1,6 @@
 // Copyright Benjamin Antieau and Deven Manam. SPDX-License-Identifier: Apache-2.0
 import React, { createContext, lazy, Suspense, useContext, useRef, useState } from "react";
+import { PlusIcon } from "./ComposerIcons";
 import { request, topicPath } from "./organization-api";
 import "./topic-media.css";
 
@@ -108,8 +109,8 @@ export function AttachmentButton({ organizationId, topicId, onInsert, onError, d
   organizationId: string; topicId: string; onInsert: (markdown: string) => void; onError?: (error: unknown) => void; disabled?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  return <span className="topic-attachment-control"><button type="button" className="org-upload-play" disabled={disabled || busy} aria-label="Attach picture or PDF"
-    title="Attach picture or PDF" onClick={() => input.current?.click()}><span aria-hidden="true">{busy ? "…" : "▶"}</span></button>
+  return <span className="topic-attachment-control"><button type="button" className="org-upload-plus" disabled={disabled || busy} aria-label="Attach picture or PDF"
+    title="Attach picture or PDF" onClick={() => input.current?.click()}>{busy ? <span aria-hidden="true">…</span> : <PlusIcon />}</button>
     <input hidden ref={input} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={event => {
       const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
       setBusy(true); setError(""); void uploadMedia(file, organizationId, topicId).then(value => {
