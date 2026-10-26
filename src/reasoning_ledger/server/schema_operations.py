@@ -7,6 +7,9 @@ from .reaction_emoji_schema import DROP_CHECK as REACTION_EMOJI_DROP
 
 PROJECT_ARTIFACTS = "ALTER TABLE research_artifacts ALTER COLUMN topic_id DROP NOT NULL"
 PROJECT_COMPUTE = "ALTER TABLE compute_jobs ALTER COLUMN topic_id DROP NOT NULL"
+# A bot run in a direct conversation with its owner has no topic, channel or project.
+BOT_DIRECT_RUNS = tuple(f"ALTER TABLE bot_runs ALTER COLUMN {column} DROP NOT NULL" for column in ("project_id", "channel_id", "topic_id"))
+BOT_DIRECT_COLUMN = "ALTER TABLE bot_runs ADD COLUMN direct_conversation_id TEXT REFERENCES direct_conversations(id)"
 CLAIM_INDEX = ("UPDATE mathematical_records SET object_id=claim_id "
                "WHERE record_type IN ('claim-head','claim-revision') AND claim_id IS NOT NULL")
 
@@ -66,7 +69,9 @@ def sqlite_migration(db, statement):
     if statement == CLAIM_INDEX:
         repair_claim_index(db)
         return
-    if statement not in {PROJECT_ARTIFACTS, PROJECT_COMPUTE}:
+    if statement == BOT_DIRECT_COLUMN and any(row[1] == "direct_conversation_id" for row in db.execute("PRAGMA table_info(bot_runs)")):
+        return
+    if statement not in {PROJECT_ARTIFACTS, PROJECT_COMPUTE, *BOT_DIRECT_RUNS}:
         db.execute(statement)
         return
     # The installation migration disables FK enforcement before BEGIN, retains
@@ -75,6 +80,9 @@ def sqlite_migration(db, statement):
         raise ValueError("SQLite table rebuild requires a checked schema migration transaction")
     if statement == PROJECT_COMPUTE:
         _project_compute(db)
+        return
+    if statement in BOT_DIRECT_RUNS:
+        _nullable_bot_run_column(db, statement.split()[5])
         return
     db.execute("""CREATE TABLE research_artifacts_rebuild (
         id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, project_id TEXT NOT NULL,
@@ -85,6 +93,29 @@ def sqlite_migration(db, statement):
     db.execute("INSERT INTO research_artifacts_rebuild SELECT * FROM research_artifacts")
     db.execute("DROP TABLE research_artifacts")
     db.execute("ALTER TABLE research_artifacts_rebuild RENAME TO research_artifacts")
+
+
+def _nullable_bot_run_column(db, column):
+    # Removing NOT NULL changes no stored row, so SQLite's documented simpler procedure applies: rewrite the table's
+    # own definition and bump the schema version, without copying the table. One edit covers all three columns, and
+    # the statements for the other two find nothing left to do; backups replay every migration to build reference
+    # schemas, so a full rebuild here would slow each of them.
+    columns = [statement.split()[5] for statement in BOT_DIRECT_RUNS]
+    schema = db.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name='bot_runs'").fetchone()[0]
+    named = re.match(r'CREATE TABLE (?:"bot_runs"|bot_runs)\s', schema)
+    if column not in columns or not named or any(f"{name} TEXT" not in schema for name in columns):
+        raise ValueError("bot run schema does not match its direct conversation migration")
+    if f"{column} TEXT NOT NULL" not in schema:
+        return
+    for name in columns:
+        schema = schema.replace(f"{name} TEXT NOT NULL", f"{name} TEXT", 1)
+    version = db.execute("PRAGMA schema_version").fetchone()[0]
+    db.execute("PRAGMA writable_schema=ON")
+    try:
+        db.execute("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name='bot_runs'", (schema,))
+        db.execute(f"PRAGMA schema_version={version + 1}")
+    finally:
+        db.execute("PRAGMA writable_schema=OFF")
 
 
 def _project_compute(db):
