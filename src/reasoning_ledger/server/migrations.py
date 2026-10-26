@@ -670,3 +670,7 @@ MIGRATIONS += (BOT_DIRECT_SCHEMA,)
 from .inference_additions_schema import SCHEMA as INFERENCE_ADDITIONS_SCHEMA  # noqa: E402
 
 MIGRATIONS += (INFERENCE_ADDITIONS_SCHEMA,)
+
+from .account_recovery_schema import SCHEMA as ACCOUNT_RECOVERY_SCHEMA  # noqa: E402
+
+MIGRATIONS += (ACCOUNT_RECOVERY_SCHEMA,)
