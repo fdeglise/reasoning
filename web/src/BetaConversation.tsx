@@ -179,7 +179,7 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
     let sideActive = false, side: Promise<void> | null = null;
     // While the topic event stream is live it delivers runs, threads and the goal, and polling is only a slow safety
     // net. A poll's result is dropped if the stream delivered anything since that poll started, so it never regresses.
-    let live = false, streamed = 0, poller: { wake(): void } | null = null;
+    let live = false, streamed = 0, healthy = false, poller: ReturnType<typeof startPolling> | null = null;
     const readFailed = (cause: unknown) => {
       if (aborted(cause) || controller.signal.aborted) return;
       setConnected(false);
@@ -212,11 +212,17 @@ export function BetaConversation({ organizationId, topicId, userId, canWrite, ca
         }
         active = records.some(run => ["queued", "running"].includes(run.status)) || sideActive;
       } catch (cause) { readFailed(cause); failed = true; }
+      healthy = !failed;
       return controller.signal.aborted ? null : live && !failed ? LIVE_SAFETY_POLL_MS : backoff.next(active);
     };
     const delivered = () => { streamed += 1; setConnected(true); setPollError(""); };
     const unsubscribe = subscribeTopicEvents(organizationId, topicId, {
-      status: status => { const next = status === "live"; if (live && !next) poller?.wake(); live = next; },
+      // Becoming live defers a poll scheduled at the ordinary cadence: the stream delivers the current state at once.
+      status: status => {
+        const next = status === "live";
+        if (live && !next) poller?.wake(); else if (!live && next && healthy) poller?.defer(LIVE_SAFETY_POLL_MS);
+        live = next;
+      },
       runs: records => { delivered(); setRuns(records); recordTiming("runs:applied"); },
       agents: agents => { delivered(); setThreads(agents); },
       goal: value => { delivered(); setGoal(value); },
@@ -376,7 +382,9 @@ function BetaRunCard({ root, organizationId, topicId, run, canManage, canControl
   return <details data-run-id={run.id} data-status={run.status} className="org-model-run org-run-compact" open={open}
     onToggle={event => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}>
     <summary><strong>{run.agent ? `${run.agent.role.replaceAll("_", " ")} · ` : ""}{run.model}</strong><span role="status">{run.cancel_requested && active ? "Cancelling…" : paused ? "paused" : run.answer_state?.status === "waiting" ? "Waiting · answer incomplete" : run.status}</span>
-      {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status ? `HTTP ${run.diagnostics.http_status}` : run.error_code.replaceAll("_", " ")}</span>}
+      {!active && run.error_code && <span title={run.diagnostics?.message}>{run.diagnostics?.http_status
+        ? `${run.diagnostics.phase === "stream" ? "Stream error" : "HTTP"} ${run.diagnostics.http_status}`
+        : run.error_code.replaceAll("_", " ")}</span>}
       {run.actual_microusd != null && <small>{usd(run.actual_microusd)}</small>}
       {active && !paused && run.status === "running" && workingFor(run) && <small className="org-run-elapsed">working · {workingFor(run)}</small>}
       {active && onStop && !run.cancel_requested && <CardStop label="Stop this reply" disabled={stopping} onStop={onStop} />}
