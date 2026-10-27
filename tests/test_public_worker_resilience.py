@@ -544,8 +544,71 @@ def test_native_completion_stops_retrying_on_shutdown(installation, monkeypatch,
         raise error
 
     monkeypatch.setattr(state, "finish", busy)
-    assert agent._finish("succeeded", usage=Usage(8, 20, 10)) is False
+    assert agent._finish("succeeded", usage=Usage(8, 20, 10)) is None, "stopping for shutdown differs from being fenced"
     assert attempts == 1 and "private completion lock" not in caplog.text
     with state.store.transaction() as db:
         current = db.execute("SELECT status,accounting_state,output_text FROM llm_runs WHERE id=?", (row["id"],)).fetchone()
         assert tuple(current) == ("running", "reserved", "A retained result.")
+
+
+def test_a_fenced_failure_still_records_its_failure(installation, monkeypatch):
+    from test_public_research_agent import ResearchFixture, turn
+
+    from reasoning_ledger.server import research_agent
+    from reasoning_ledger.server.inference_store import InferenceStore
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("private native failure")
+
+    statuses = []
+
+    def fenced(_state, _row, status, **_outcome):
+        # Another path already completed this attempt: finish commits nothing and reports the fence.
+        statuses.append(status)
+        return False
+
+    monkeypatch.setattr(research_agent.ReasoningNativeExecutor, "execute", broken)
+    monkeypatch.setattr(InferenceStore, "finish", fenced)
+    state, owner, _, row = turn(installation, ResearchFixture("final"))
+    assert statuses == ["failed"]
+    phases = [event["event"] for event in state.events(owner["user_id"], owner["organization_id"], row["id"], 0)]
+    failed = [event for event in phases if event.get("phase") == "failed"]
+    assert [event["reason"] for event in failed] == ["agent_execution_error"], "only stopping for shutdown ends the turn early"
+
+
+def test_busy_plain_completion_is_retried_with_its_outcome(installation, monkeypatch, caplog):
+    _, state, _, owner, topics = prepare(installation)
+    user, org = owner["user_id"], owner["organization_id"]
+    row = enqueue(state, owner, topics[1]["id"], client="plain-completion", models=MODELS[:1])[0]
+    with state.store.transaction(write=True) as db:
+        # A request accepted by an earlier release has no research snapshot and streams one plain reply.
+        db.execute("DELETE FROM research_contexts WHERE request_id=?", (row["request_id"],))
+    finish, outcomes = state.finish, []
+
+    def busy_twice(run, status, **outcome):
+        if run["id"] == row["id"]:
+            outcomes.append((status, outcome))
+            if len(outcomes) <= 2:
+                error = sqlite3.OperationalError("private plain completion lock")
+                error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                raise error
+        return finish(run, status, **outcome)
+
+    monkeypatch.setattr(state, "finish", busy_twice)
+    provider = Fixture()
+    worker = InferenceWorker(state, provider.provider)
+    worker.start()
+    try:
+        wait(lambda: state.run(user, org, row["id"])["status"] == "succeeded")
+        assert len(outcomes) == 3 and all(outcome == outcomes[0] for outcome in outcomes) and outcomes[0][0] == "succeeded"
+        assert worker.running
+        with state.store.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM messages WHERE inference_run_id=?", (row["id"],)).fetchone()[0] == 1
+            calls = db.execute("SELECT id FROM inference_calls WHERE run_id=?", (row["id"],)).fetchall()
+            assert len(calls) == 1, "the model is not called again"
+            assert db.execute("SELECT COUNT(*) FROM inference_call_events WHERE call_id=? AND kind='completion'",
+                              (calls[0][0],)).fetchone()[0] == 1
+        assert "Run result persistence is busy; retained result will be retried" in caplog.text
+        assert "private plain completion lock" not in caplog.text
+    finally:
+        worker.stop()

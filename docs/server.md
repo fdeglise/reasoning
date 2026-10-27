@@ -492,9 +492,11 @@ SQLite busy/locked errors after rollback; it does not replay provider calls or
 deliveries with uncertain outcomes.
 SQLite contention during supplementary review completion is also deferred to
 maintenance without stopping inference or replaying the completed model request.
-Native run completion retries its atomic result transaction on SQLite contention,
-preserving its outcome and usage without another provider call. These retries
-stop on worker shutdown; unfinished runs follow normal restart recovery.
+Run completion retries its atomic result transaction on SQLite contention, for
+research turns and plain streamed replies, preserving its outcome and usage without
+another provider call. The wait between attempts is at most one second and the
+number of attempts is unlimited. These retries stop on worker shutdown; unfinished
+runs follow normal restart recovery.
 `source_revision` is the 40- or 64-character commit recorded in the release's
 `manifest.json` beside `--frontend-dir`, and `source_modified` is that manifest's
 uncommitted-changes flag; both are null unless the manifest's SHA-256 equals

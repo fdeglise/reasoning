@@ -16,7 +16,7 @@ from .research_goals import ResearchGoals
 from .research_provider import ResearchCompletion
 from .research_tools import ResearchTools
 from .store import StoreError
-from .worker_poll import database_busy
+from .worker_poll import database_busy, persist_completion
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +328,7 @@ class ResearchAgent:
                     "tool_budget_exhausted": bool(result.metadata.get("tool_budget_exhausted")),
                 })
             cancelled_status = "interrupted" if self.stop_requested() else "cancelled"
-            if not self._finish(
+            if self._finish(
                 "succeeded" if completed else cancelled_status if self.cancelled else "failed",
                 usage=usage,
                 no_charge=self.client.no_charge,
@@ -336,7 +336,7 @@ class ResearchAgent:
                 if self.cancelled
                 else failure,
                 accounting_unknown=unknown,
-            ):
+            ) is None:
                 return
             if not completed:
                 with self.store.transaction(write=True) as db:
@@ -350,13 +350,13 @@ class ResearchAgent:
                          accounting_unknown=any(not error["no_charge"] for error in self.client.errors))
         except Exception as exc:
             usage = self.client.aggregate()
-            if not self._finish(
+            if self._finish(
                 "interrupted" if self.stop_requested() else "cancelled" if self._stopped() else "failed",
                 usage=usage,
                 no_charge=self.client.no_charge,
                 error=self._cancel_reason() if self.cancelled else self.client.failure_code or "agent_execution_error",
                 accounting_unknown=any(not error["no_charge"] for error in self.client.errors),
-            ):
+            ) is None:
                 return
             self._event("failed", {"reason": self.client.failure_code or "agent_execution_error",
                 "exception_type": type(exc).__name__
@@ -374,25 +374,13 @@ class ResearchAgent:
                 logger.warning("Review completion is busy; retained work will be retried")
 
     def _finish(self, status, **outcome):
-        """Retry only atomic completion, retaining the outcome and paid usage."""
-        delay, warned = 0.1, False
-        while True:
-            try:
-                return self.inference.finish(self.row, status, **outcome)
-            except sqlite3.OperationalError as error:
-                if not database_busy(error):
-                    raise
-                if not warned:
-                    logger.warning("Native result persistence is busy; retained result will be retried")
-                    warned = True
-                # An unavailable database must not keep retrying through shutdown.
-                # The fenced run remains durable for normal restart recovery.
-                if self.stop_requested():
-                    return False
-                time.sleep(delay)
-                if self.stop_requested():
-                    return False
-                delay = min(1.0, delay * 2)
+        """Complete the run, retrying only its atomic transaction on contention and retaining the outcome and paid usage.
+
+        Returns whether the run was completed here (False: another attempt or path already fenced it), or None when
+        retries stopped for shutdown. Only None ends the turn early; a fenced run still records its failure.
+        """
+        return persist_completion(lambda: self.inference.finish(self.row, status, **outcome), stopped=self.stop_requested,
+                                  warning="Native result persistence is busy; retained result will be retried")
 
     def _compaction_complete(self, payload, timeout):
         import asyncio
