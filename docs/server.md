@@ -490,6 +490,8 @@ with `status: "degraded"`, including before startup and after shutdown. Explicit
 disabled inference does not count as a worker failure. Queue polling retries
 SQLite busy/locked errors after rollback; it does not replay provider calls or
 deliveries with uncertain outcomes.
+SQLite contention during supplementary review completion is also deferred to
+maintenance without stopping inference or replaying the completed model request.
 `source_revision` is the 40- or 64-character commit recorded in the release's
 `manifest.json` beside `--frontend-dir`, and `source_modified` is that manifest's
 uncommitted-changes flag; both are null unless the manifest's SHA-256 equals

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import sqlite3
 import time
 
 from ..agents.contracts import AgentEventKind, AgentRunSpec, PreparedAgentRun, PromptBinding, RunBudget, ToolBinding
@@ -14,6 +16,9 @@ from .research_goals import ResearchGoals
 from .research_provider import ResearchCompletion
 from .research_tools import ResearchTools
 from .store import StoreError
+from .worker_poll import database_busy
+
+logger = logging.getLogger(__name__)
 
 
 class TurnSuspended(BaseException):
@@ -359,7 +364,14 @@ class ResearchAgent:
         finally:
             from .research_reviews import ResearchReviews
 
-            ResearchReviews(self.inference).finish(self.row)
+            try:
+                ResearchReviews(self.inference).finish(self.row)
+            except sqlite3.OperationalError as error:
+                if not database_busy(error):
+                    raise
+                # The transaction rolled back. Maintenance finds terminal reviewer
+                # runs and retries only their review bookkeeping, never the model.
+                logger.warning("Review completion is busy; retained work will be retried")
 
     def _compaction_complete(self, payload, timeout):
         import asyncio

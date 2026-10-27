@@ -466,7 +466,7 @@ minutes. Retries of an accepted request do not consume another request slot.
 ## Execution and recovery
 
 `reasoning-server serve` starts one installation-owned inference worker with
-two concurrent turns and a 1,800-second execution timeout per turn. A private exclusive
+eight concurrent turns by default and a 1,800-second execution timeout per turn. A private exclusive
 file lock prevents a second executor from using the same installation. Queues,
 attempt fencing, text deltas, terminal state, and assistant messages are stored
 in SQLite. Provider SSE is incrementally decoded, including split UTF-8 chunks;
@@ -495,10 +495,13 @@ attempt cannot append text or publish another final message.
 On shutdown, active calls are interrupted. On restart, abandoned running calls
 are marked interrupted and are **not automatically retried**: they may already
 have been billed. Previously queued, never-submitted calls can proceed. Known
-usage persisted before an interruption is retained. If execution fails
-unexpectedly, worker availability becomes false; restart the server to recover
-durable work. The current server requires a single executing process per
-installation, not multiple inference-enabled Uvicorn workers.
+usage persisted before an interruption is retained. SQLite busy/locked errors
+during supplementary review completion leave the worker running and preserve
+the saved answer and accounting. Maintenance retries the rolled-back review
+transaction for terminal reviewer runs without repeating the model request.
+Other unhandled execution or maintenance errors make worker availability false;
+restart the server to recover durable work. The current server requires a single
+executing process per installation, not multiple inference-enabled Uvicorn workers.
 An explicit provider token-limit or filtering finish is treated as an incomplete
 response, even when it includes valid charge information.
 

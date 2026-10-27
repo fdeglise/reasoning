@@ -1,6 +1,7 @@
 """Background queues retain work across real SQLite writer contention."""
 
 import asyncio
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -282,3 +283,125 @@ def test_busy_goal_admission_stays_active_then_enqueues_once(installation, monke
     assert current["status"] == "active" and current["turns"] == 1
     with state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM llm_runs").fetchone()[0] == 1
+
+
+def test_busy_review_completion_is_retried_without_replaying_settled_execution(installation, monkeypatch):
+    from test_organization_research_workbench import ReviewerFixture, source_run
+
+    from reasoning_ledger.server.openrouter import Quote
+    from reasoning_ledger.server.research_agent import ResearchAgent
+    from reasoning_ledger.server.research_reviews import ResearchReviews
+
+    state, owner, topics, parent, tools = source_run(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    claim = tools.invoke("ledger_claim", {"statement": "The integer 2 equals itself."})["result"]
+    proof = tools.invoke("ledger_prove", {"claim_id": claim["claim_id"], "argument": "Reflexivity."})["result"]
+    reviews = ResearchReviews(state)
+    review = reviews.request(tools, proof_id=proof["proof_id"])
+    state.finish(parent, "succeeded", usage=Usage(7, 20, 5))
+    fixture = ReviewerFixture()
+    asyncio.run(reviews.dispatch(fixture.provider))
+    child = state.claim()
+    poll, attempted = contend_once(state.store, ResearchReviews.finish)
+    monkeypatch.setattr(ResearchReviews, "finish", poll)
+
+    ResearchAgent(state, fixture.provider, child, Quote(**json.loads(child["quote_json"]))).execute()
+    assert attempted.is_set() and len(fixture.requests) == 1
+    with state.store.transaction() as db:
+        settled = dict(db.execute("SELECT * FROM llm_runs WHERE id=?", (child["id"],)).fetchone())
+        assert settled["status"] == "succeeded" and settled["accounting_state"] == "settled"
+        assert db.execute("SELECT status FROM mathematical_reviews WHERE id=?", (review["id"],)).fetchone()[0] == "running"
+        assert db.execute("SELECT COUNT(*) FROM mathematical_records WHERE record_type='verification'").fetchone()[0] == 0
+    balance = state.balance(user, org)
+
+    worker = InferenceWorker(state, fixture.provider)
+    worker.start()
+    try:
+        wait(lambda: reviews.list(user, org, topic)[0]["status"] == "complete")
+        # Maintenance retries bookkeeping; repeated passes must not certify or charge twice.
+        asyncio.run(reviews.dispatch(fixture.provider))
+        asyncio.run(reviews.dispatch(fixture.provider))
+        with state.store.transaction() as db:
+            assert dict(db.execute("SELECT * FROM llm_runs WHERE id=?", (child["id"],)).fetchone()) == settled
+            assert db.execute("SELECT COUNT(*) FROM mathematical_records WHERE record_type='verification'").fetchone()[0] == 1
+            assert db.execute("SELECT COUNT(*) FROM inference_calls WHERE run_id=?", (child["id"],)).fetchone()[0] == 1
+            assert db.execute("SELECT COUNT(*) FROM llm_runs").fetchone()[0] == 2
+        assert state.balance(user, org) == balance and len(fixture.requests) == 1
+        later = enqueue(state, owner, topic, client="after-review-cleanup", models=MODELS[:1])[0]
+        wait(lambda: state.run(user, org, later["id"])["status"] == "succeeded")
+        assert worker.running and len(fixture.requests) == 2
+    finally:
+        worker.stop()
+
+
+def test_busy_completion_preserves_active_sibling_and_later_dispatch(installation, monkeypatch):
+    from test_public_research_agent import ResearchFixture
+
+    from reasoning_ledger.server.research_reviews import ResearchReviews
+
+    _, state, _, owner, topics = prepare(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    first = enqueue(state, owner, topic, client="first-completion", models=MODELS[:1])[0]
+    state.store.post_message(user, org, topic, "sibling-wait-marker", "sibling-human")
+    sibling = enqueue(state, owner, topic, client="active-sibling", models=MODELS[:1])[0]
+    entered, release = threading.Event(), threading.Event()
+
+    class GatedFixture(ResearchFixture):
+        def handle(self, request):
+            if request.method == "POST":
+                if "sibling-wait-marker" in request.content.decode():
+                    entered.set()
+                    assert release.wait(5), "sibling provider was never released"
+                else:
+                    assert entered.wait(5), "sibling did not execute concurrently"
+            return super().handle(request)
+
+    original_finish = ResearchReviews.finish
+    poll, attempted = contend_once(state.store, original_finish)
+
+    def finish(reviews, row):
+        return poll(reviews, row) if row["id"] == first["id"] else original_finish(reviews, row)
+
+    monkeypatch.setattr(ResearchReviews, "finish", finish)
+    fixture = GatedFixture("final")
+    worker = InferenceWorker(state, fixture.provider)
+    worker.start()
+    try:
+        wait(attempted.is_set)
+        assert entered.is_set() and state.run(user, org, first["id"])["status"] == "succeeded"
+        assert state.run(user, org, sibling["id"])["status"] == "running"
+        release.set()
+        wait(lambda: state.run(user, org, sibling["id"])["status"] == "succeeded")
+        later = enqueue(state, owner, topic, client="after-sibling", models=MODELS[:1])[0]
+        wait(lambda: state.run(user, org, later["id"])["status"] == "succeeded")
+        assert worker.running and len(fixture.requests) == 3
+        assert all(state.run(user, org, row["id"])["accounting_state"] == "settled" for row in (first, sibling, later))
+    finally:
+        release.set()
+        worker.stop()
+
+
+@pytest.mark.parametrize("code", [sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_IOERR])
+def test_review_completion_defers_only_contention_and_redacts_errors(installation, monkeypatch, caplog, code):
+    from test_public_research_agent import ResearchFixture, turn
+
+    from reasoning_ledger.server.research_reviews import ResearchReviews
+
+    error = sqlite3.OperationalError("private completion path and secret")
+    error.sqlite_errorcode = code
+
+    def broken(_reviews, _row):
+        raise error
+
+    monkeypatch.setattr(ResearchReviews, "finish", broken)
+    fixture = ResearchFixture("final")
+    if code == sqlite3.SQLITE_IOERR:
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            turn(installation, fixture)
+        assert caught.value is error
+    else:
+        state, owner, _, row = turn(installation, fixture)
+        result = state.run(owner["user_id"], owner["organization_id"], row["id"])
+        assert result["status"] == "succeeded" and result["accounting_state"] == "settled"
+        assert caplog.records
+    assert len(fixture.requests) == 1 and str(error) not in caplog.text
