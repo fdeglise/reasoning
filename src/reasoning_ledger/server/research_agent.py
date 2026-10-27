@@ -328,8 +328,7 @@ class ResearchAgent:
                     "tool_budget_exhausted": bool(result.metadata.get("tool_budget_exhausted")),
                 })
             cancelled_status = "interrupted" if self.stop_requested() else "cancelled"
-            self.inference.finish(
-                self.row,
+            if not self._finish(
                 "succeeded" if completed else cancelled_status if self.cancelled else "failed",
                 usage=usage,
                 no_charge=self.client.no_charge,
@@ -337,7 +336,8 @@ class ResearchAgent:
                 if self.cancelled
                 else failure,
                 accounting_unknown=unknown,
-            )
+            ):
+                return
             if not completed:
                 with self.store.transaction(write=True) as db:
                     db.execute(
@@ -346,18 +346,18 @@ class ResearchAgent:
                     )
         except TurnSuspended as suspension:
             self._event("waiting", {"reason": str(suspension)})
-            self.inference.finish(self.row, "succeeded", usage=self.client.aggregate(), no_charge=self.client.no_charge,
-                                  accounting_unknown=any(not error["no_charge"] for error in self.client.errors))
+            self._finish("succeeded", usage=self.client.aggregate(), no_charge=self.client.no_charge,
+                         accounting_unknown=any(not error["no_charge"] for error in self.client.errors))
         except Exception as exc:
             usage = self.client.aggregate()
-            self.inference.finish(
-                self.row,
+            if not self._finish(
                 "interrupted" if self.stop_requested() else "cancelled" if self._stopped() else "failed",
                 usage=usage,
                 no_charge=self.client.no_charge,
                 error=self._cancel_reason() if self.cancelled else self.client.failure_code or "agent_execution_error",
                 accounting_unknown=any(not error["no_charge"] for error in self.client.errors),
-            )
+            ):
+                return
             self._event("failed", {"reason": self.client.failure_code or "agent_execution_error",
                 "exception_type": type(exc).__name__
                 if isinstance(exc, (ValueError, TypeError, KeyError, StoreError)) else "InternalError"})
@@ -372,6 +372,27 @@ class ResearchAgent:
                 # The transaction rolled back. Maintenance finds terminal reviewer
                 # runs and retries only their review bookkeeping, never the model.
                 logger.warning("Review completion is busy; retained work will be retried")
+
+    def _finish(self, status, **outcome):
+        """Retry only atomic completion, retaining the outcome and paid usage."""
+        delay, warned = 0.1, False
+        while True:
+            try:
+                return self.inference.finish(self.row, status, **outcome)
+            except sqlite3.OperationalError as error:
+                if not database_busy(error):
+                    raise
+                if not warned:
+                    logger.warning("Native result persistence is busy; retained result will be retried")
+                    warned = True
+                # An unavailable database must not keep retrying through shutdown.
+                # The fenced run remains durable for normal restart recovery.
+                if self.stop_requested():
+                    return False
+                time.sleep(delay)
+                if self.stop_requested():
+                    return False
+                delay = min(1.0, delay * 2)
 
     def _compaction_complete(self, payload, timeout):
         import asyncio

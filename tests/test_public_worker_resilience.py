@@ -405,3 +405,147 @@ def test_review_completion_defers_only_contention_and_redacts_errors(installatio
         assert result["status"] == "succeeded" and result["accounting_state"] == "settled"
         assert caplog.records
     assert len(fixture.requests) == 1 and str(error) not in caplog.text
+
+
+def test_busy_native_completion_preserves_success_and_later_dispatch(installation, monkeypatch, caplog):
+    from test_public_research_agent import ResearchFixture
+
+    _, state, _, owner, topics = prepare(installation)
+    user, org, topic = owner["user_id"], owner["organization_id"], topics[1]["id"]
+    first = enqueue(state, owner, topic, client="primary-completion", models=MODELS[:1])[0]
+    finish, outcomes = state.finish, []
+
+    def busy_twice(row, status, **outcome):
+        if row["id"] == first["id"]:
+            outcomes.append((status, outcome))
+            if len(outcomes) <= 2:
+                # Fast real contention; the separate session test exercises the
+                # original finish transaction and its production 15s timeout.
+                with sqlite3.connect(state.store.database) as writer:
+                    writer.execute("BEGIN IMMEDIATE")
+                    with sqlite3.connect(state.store.database, timeout=0.01) as contender:
+                        contender.execute("BEGIN IMMEDIATE")
+        return finish(row, status, **outcome)
+
+    monkeypatch.setattr(state, "finish", busy_twice)
+    provider = ResearchFixture("final")
+    worker = InferenceWorker(state, provider.provider)
+    worker.start()
+    try:
+        wait(lambda: state.run(user, org, first["id"])["status"] == "succeeded")
+        assert len(outcomes) == 3 and all(outcome == outcomes[0] for outcome in outcomes)
+        assert outcomes[0][0] == "succeeded"
+        later = enqueue(state, owner, topic, client="after-primary-completion", models=MODELS[:1])[0]
+        wait(lambda: state.run(user, org, later["id"])["status"] == "succeeded")
+        assert worker.running and len(provider.requests) == 2
+        with state.store.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM messages WHERE inference_run_id=?", (first["id"],)).fetchone()[0] == 1
+            assert db.execute("SELECT actual_microusd FROM llm_runs WHERE id=?", (first["id"],)).fetchone()[0] == 8
+            assert db.execute("SELECT COUNT(*) FROM inference_calls WHERE run_id=?", (first["id"],)).fetchone()[0] == 1
+        assert "Native result persistence is busy; retained result will be retried" in caplog.text
+    finally:
+        worker.stop()
+
+
+def native_completion(installation):
+    from reasoning_ledger.server.openrouter import Quote
+    from reasoning_ledger.server.research_agent import ResearchAgent
+
+    _, state, _, owner, topics = prepare(installation)
+    enqueue(state, owner, topics[1]["id"], client="native-completion", models=MODELS[:1])
+    row = state.claim()
+    state.progress(row, "A retained result.", "gen-completion")
+    agent = ResearchAgent(state, None, row, Quote(**json.loads(row["quote_json"])))
+    return state, owner, row, agent
+
+
+def test_native_completion_retries_rolled_back_answer_and_accounting(installation, monkeypatch):
+    state, owner, row, agent = native_completion(installation)
+    event, attempts = state._event, 0
+
+    def busy_after_answer(db, org, identity, body):
+        nonlocal attempts
+        if body.get("type") == "state" and body.get("status") == "succeeded":
+            attempts += 1
+            if attempts == 1:
+                assert db.execute("SELECT COUNT(*) FROM messages WHERE inference_run_id=?", (identity,)).fetchone()[0] == 1
+                error = sqlite3.OperationalError("completion transaction is busy")
+                error.sqlite_errorcode = sqlite3.SQLITE_BUSY_SNAPSHOT
+                raise error
+        event(db, org, identity, body)
+
+    monkeypatch.setattr(state, "_event", busy_after_answer)
+    assert agent._finish("succeeded", usage=Usage(8, 20, 10)) is True
+    assert attempts == 2
+    # A second completion attempt is fenced, even after a successful retry.
+    assert agent._finish("succeeded", usage=Usage(8, 20, 10)) is False
+    current = state.run(owner["user_id"], owner["organization_id"], row["id"])
+    assert current["status"] == "succeeded" and current["accounting_state"] == "settled"
+    assert current["actual_microusd"] == 8
+    with state.store.transaction() as db:
+        parent = db.execute("SELECT id FROM messages WHERE organization_id=? AND topic_id=? AND sequence=?",
+                            (row["organization_id"], row["topic_id"], row["context_through_sequence"])).fetchone()[0]
+        replies = db.execute("SELECT reply_to FROM messages WHERE inference_run_id=?", (row["id"],)).fetchall()
+        assert [reply[0] for reply in replies] == [parent]
+
+
+def test_native_completion_rechecks_cancellation_after_contention(installation, monkeypatch):
+    state, owner, row, agent = native_completion(installation)
+    finish, attempts = state.finish, 0
+
+    def cancel_once(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            state.cancel(owner["user_id"], owner["organization_id"], row["id"])
+            error = sqlite3.OperationalError("completion transaction is busy")
+            error.sqlite_errorcode = sqlite3.SQLITE_LOCKED
+            raise error
+        return finish(*args, **kwargs)
+
+    monkeypatch.setattr(state, "finish", cancel_once)
+    assert agent._finish("succeeded", usage=Usage(8, 20, 10)) is True
+    current = state.run(owner["user_id"], owner["organization_id"], row["id"])
+    assert current["status"] == "cancelled" and current["actual_microusd"] == 8
+    assert current["accounting_state"] == "settled" and attempts == 2
+
+
+@pytest.mark.parametrize("code", [None, sqlite3.SQLITE_IOERR])
+def test_native_completion_does_not_retry_other_database_errors(installation, monkeypatch, caplog, code):
+    state, _, _, agent = native_completion(installation)
+    error = sqlite3.OperationalError("private completion error")
+    if code is not None:
+        error.sqlite_errorcode = code
+    attempts = 0
+
+    def broken(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise error
+
+    monkeypatch.setattr(state, "finish", broken)
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        agent._finish("succeeded", usage=Usage(8, 20, 10))
+    assert caught.value is error and attempts == 1
+    assert str(error) not in caplog.text
+
+
+def test_native_completion_stops_retrying_on_shutdown(installation, monkeypatch, caplog):
+    state, _, row, agent = native_completion(installation)
+    stopped, attempts = threading.Event(), 0
+    agent.stop_requested = stopped.is_set
+
+    def busy(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        stopped.set()
+        error = sqlite3.OperationalError("private completion lock")
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        raise error
+
+    monkeypatch.setattr(state, "finish", busy)
+    assert agent._finish("succeeded", usage=Usage(8, 20, 10)) is False
+    assert attempts == 1 and "private completion lock" not in caplog.text
+    with state.store.transaction() as db:
+        current = db.execute("SELECT status,accounting_state,output_text FROM llm_runs WHERE id=?", (row["id"],)).fetchone()
+        assert tuple(current) == ("running", "reserved", "A retained result.")

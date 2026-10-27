@@ -495,8 +495,13 @@ attempt cannot append text or publish another final message.
 On shutdown, active calls are interrupted. On restart, abandoned running calls
 are marked interrupted and are **not automatically retried**: they may already
 have been billed. Previously queued, never-submitted calls can proceed. Known
-usage persisted before an interruption is retained. SQLite busy/locked errors
-during supplementary review completion leave the worker running and preserve
+usage persisted before an interruption is retained. Native run completion retries
+SQLite busy/locked errors with bounded backoff, retaining the chosen outcome and
+usage while the worker remains active. Only the atomic completion transaction is
+retried; the model is not called again. It rechecks attempt fencing and cancellation
+before committing one final answer and accounting state. If shutdown is requested
+after a busy error, retries stop and the unfinished run is left for restart recovery.
+SQLite busy/locked errors during supplementary review completion preserve
 the saved answer and accounting. Maintenance retries the rolled-back review
 transaction for terminal reviewer runs without repeating the model request.
 Other unhandled execution or maintenance errors make worker availability false;
