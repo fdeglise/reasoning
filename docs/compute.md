@@ -215,6 +215,18 @@ or restart from a new state directory to bypass uncertain cleanup. Credential,
 app, catalog, or resource-profile changes require explicit operator migration;
 the backend will not silently adopt them.
 
+Each relay keeps `modal-last-attempt.json` in its private data directory. It
+records the latest attempt's job, worker, attempt and sandbox IDs, current stage,
+execution outcome, safe error code and exception class, update timestamp, and whether VM cleanup was
+verified. The receipt survives ordinary job settlement; the next attempt replaces
+it. Stages distinguish VM creation, Docker client setup/readiness, image download,
+and execution/result collection. Startup failures also produce one short line in
+the job output, without provider error bodies, credentials, or submitted source.
+Image downloads use Docker's quiet mode and retain their bounded transport and
+timeout. An execution outcome alone does not establish successful VM cleanup.
+These diagnostics require the updated relay runtime; upgrading the website alone
+does not replace the separately installed Modal relay code.
+
 For a first DigitalOcean organization, use
 [interactive Modal setup](deployment.md#modal-in-interactive-setup). On owned
 Linux hardware, install the optional SDK with `uv sync --locked --extra modal` in the
@@ -350,8 +362,9 @@ workers on rented/owned hardware, or opt into Modal relays during setup. Docker
 enrollment/submission does not provision a VM; an enabled Modal relay creates a
 paid sandbox when it claims an eligible job under the approved setup policy.
 
-Select an image and supported language, enter the program, and set all six
-integer resource limits. Byte fields use exact bytes (1 MiB = 1048576 bytes,
+Select an image and supported language and enter the program. **Resource limits
+and quota** contains the six integer resource limits and the available, used,
+and held CPU-time balance. Byte fields use exact bytes (1 MiB = 1048576 bytes,
 1 GiB = 1073741824 bytes), not rounded units. Choosing an image initializes
 defaults bounded by its approved maxima. **Submit computation** captures the
 exact program, limits, and a request identifier. Lost/error receipts retain that
@@ -363,17 +376,19 @@ sign-out/session loss clears it. Before starting another computation after lost
 state, inspect the topic's chronological activity. **Stop retrying request** is an explicitly
 confirmed local action, not cancellation of an already-accepted job.
 
-Standalone jobs appear as computation cards among the gamma topic's messages
+Standalone jobs appear as computation cards among beta and gamma topic messages
 and workflow runs. **Earlier compute activity** pages older records in batches
-of 50. Cards expand to inspect durable
-state, exclusive-cursor events, and committed artifacts. Programs, evidence,
+of 50. Expanded cards show status, elapsed time since the worker claimed the job
+(including setup), program output, and downloadable files when present.
+**Computation details** contains the program, job and worker IDs, usage,
+image evidence, resource limits, file checksums, and state events. Programs, evidence,
 and logs are plain untrusted text, not HTML or executable UI. The worker delivers
 logs after container cleanup, not as a live interpreter stream. Artifact links
 download attachments in the browser; the desktop host denies downloads, so open
 the server separately in your browser for files. Inspect untrusted files before
 using them. Viewer accounts can inspect output but cannot submit or cancel.
 
-The requester/admin can **Request cancellation**. Until confirmed termination
+The requester/admin can press **Stop**. Until confirmed termination
 and settlement, running/unknown jobs keep their reservation. Administrators can
 expand **Reconcile uncertain computation** only for an unknown outcome, supply
 verified elapsed milliseconds, and explicitly confirm physical container cleanup.
