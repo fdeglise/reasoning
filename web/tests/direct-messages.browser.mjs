@@ -47,6 +47,14 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     // People doubles as the inbox: there is no separate conversation list, and + messages any member.
     await visible(owner.getByRole("complementary", { name: "Online people and bots" }).getByRole("button", { name: "New direct message", exact: true }));
     assert.equal(await owner.getByRole("navigation", { name: "Direct messages" }).count(), 0);
+    // The People header's buttons are the same 24px squares as the sidebar header's.
+    const headerButtons = await Promise.all(["New project", "Organization information", "New direct message", "Collapse online sidebar"]
+      .map(name => owner.getByRole("button", { name, exact: true }).evaluate(button => {
+        const box = button.getBoundingClientRect(), style = getComputedStyle(button);
+        return { width: box.width, height: box.height, border: style.borderTopColor, radius: style.borderTopLeftRadius, size: style.fontSize };
+      })));
+    for (const button of headerButtons) assert.deepEqual(button, headerButtons[0]);
+    assert.equal(headerButtons[0].width, 24); assert.equal(headerButtons[0].height, 24);
 
     await owner.getByRole("button", { name: "Account menu", exact: true }).click();
     await owner.getByRole("button", { name: "Administration" }).click();
@@ -158,13 +166,22 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     await owner.keyboard.press("Escape");
     await thread.waitFor({ state: "detached" });
 
-    // Your own groups are mirrored: dot and line on the right, toolbar on the left; each person keeps one color in both browsers.
+    // Your own messages hug the right edge with left-aligned text: dot and line on the right, toolbar on the left;
+    // each person keeps one color in both browsers.
     // The reply quotes "section 3" in its pointer, so match only the messages without one.
     const ownOriginal = conversation.locator(".org-message").filter({ hasText: "Could you read section 3", hasNot: owner.locator(".org-reply-pointer") });
     const theirCopy = reply.locator(".org-message").filter({ hasText: "Could you read section 3", hasNot: member.locator(".org-reply-pointer") });
     const mine = ownOriginal.locator("xpath=..");
     assert.match(await mine.getAttribute("class"), /org-message-group-mine/);
     assert.doesNotMatch(await answered.locator("xpath=..").getAttribute("class"), /org-message-group-mine/);
+    const placement = await ownOriginal.evaluate(element => {
+      const transcript = element.closest(".org-transcript"), area = transcript.getBoundingClientRect(), box = element.getBoundingClientRect();
+      return { align: getComputedStyle(element.querySelector("p")).textAlign,
+        left: box.left - area.left - parseFloat(getComputedStyle(transcript).paddingLeft),
+        right: area.right - parseFloat(getComputedStyle(transcript).paddingRight) - box.right };
+    });
+    assert.equal(placement.align, "start");
+    assert.ok(placement.right < 1 && placement.left > 100, `your message hugs the right edge: ${JSON.stringify(placement)}`);
     await ownOriginal.hover();
     const [box, launcher] = await Promise.all([ownOriginal.boundingBox(), ownOriginal.getByRole("button", { name: "Add reaction", exact: true }).boundingBox()]);
     assert.ok(launcher.x + launcher.width / 2 < box.x + box.width / 2, "the toolbar of your own message is on the left");
@@ -188,7 +205,7 @@ test("a member messages a colleague from People, who finds, reads and replies, t
     for (const stop = Date.now() + 15000; await sendFiles.isDisabled() && Date.now() < stop;) await new Promise((resolve) => setTimeout(resolve, 100));
     // As in a human chat, the plus and the return button sit inside the box, at its left and right ends.
     const composerBox = await conversation.locator(".org-composer-box").boundingBox(), sendBox = await sendFiles.boundingBox();
-    const plusBox = await conversation.getByRole("button", { name: "Attach pictures or PDFs", exact: true }).boundingBox();
+    const plusBox = await conversation.getByRole("button", { name: "Attach pictures, PDFs or Markdown", exact: true }).boundingBox();
     assert.ok(plusBox.x - composerBox.x < 12 && composerBox.x + composerBox.width - sendBox.x - sendBox.width < 12, "plus left, return right, inside the box");
     assert.equal(plusBox.y, sendBox.y); assert.equal(plusBox.height, 28);
     await sendFiles.click();

@@ -51,6 +51,8 @@ test("progress follows its human message, retained failures stay inspectable, an
           diagnostics: { message: "Check provider credit.", action: "Inspect the provider account.", http_status: 402 } },
         { ...base, id: "waiting-review", status: "succeeded", answer_state: { status: "waiting", reason: "independent review",
           checkpoint: { summary: "The finite case is settled.", remaining: "Check the infinite case.", sources: ["Lemma 2"] } } },
+        { ...base, id: "continued-coordinator", status: "succeeded", agent: { role: "coordinator", root_run: "continued-coordinator" },
+          answer_state: { status: "continued", reason: "delegated work", next_run: "handoff", checkpoint: null } },
       ];
       else if (path.endsWith("/bot-runs")) data = [{ id: "working", bot_id: bot, model: "default", status: "running", phase: "thinking",
         created_at: base.created_at, context_through_sequence: 1, requested_by: user, activity: [] }];
@@ -82,6 +84,12 @@ test("progress follows its human message, retained failures stay inspectable, an
     await waiting.locator("summary").first().click();
     await waiting.getByText("The finite case is settled.", { exact: true }).waitFor();
     await waiting.getByText("Remaining: Check the infinite case.", { exact: true }).waitFor();
+    // A coordinator that waited for delegates stops saying so once a later reply continued its work.
+    const continued = page.locator('[data-run-id="continued-coordinator"]');
+    await continued.getByText("Continued in a later reply", { exact: true }).waitFor();
+    assert.equal(await continued.getByText("Waiting · answer incomplete", { exact: true }).count(), 0);
+    await continued.locator("summary").first().click();
+    await continued.getByText("Waited for delegated work. A later reply continued this work and carries the answer.", { exact: true }).waitFor();
     // The box has one button at its right, and it never stops: the running reply has Stop in its own card header,
     // so beside a paused request the box's button resumes.
     const resume = page.getByRole("button", { name: "Start or resume", exact: true });
@@ -92,7 +100,7 @@ test("progress follows its human message, retained failures stay inspectable, an
     assert.equal(button.width, 28); assert.equal(button.height, 28);
     assert.ok(button.x + button.width <= box.x + box.width && button.x + button.width >= box.x + box.width - 12, "the button sits at the box's right edge");
     // Under the box: the 28px plus, then the ⓘ and the model at the ⓘ square's 24px height, all centred on one line.
-    const row = await Promise.all(["Attach picture or PDF", "Model details", "Choose reply model"]
+    const row = await Promise.all(["Attach picture, PDF or Markdown", "Model details", "Choose reply model"]
       .map(name => page.getByRole("button", { name, exact: true }).boundingBox()));
     assert.deepEqual(row.map(item => item.height), [28, 24, 24]);
     for (const item of row) { assert.equal(item.y + item.height / 2, row[0].y + row[0].height / 2); assert.ok(item.y >= box.y + box.height); }

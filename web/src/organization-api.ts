@@ -131,11 +131,11 @@ export function invitationEmailLabel(invitation: Invitation): string {
     rejected: "Email rejected; share the invitation link", unknown: "Email submission uncertain; no automatic resend", cancelled: "Email cancelled" };
   return invitation.email_state ? labels[invitation.email_state] : "Link sharing only";
 }
-export type Policy = { allowed_models: string[]; monthly_budget_microusd: number };
+export type Policy = { allowed_models: string[] };
 export type InferenceConfiguration = {
   routing?: RoutingPolicy;
   allowed_models: string[]; has_organization_key: boolean; enabled: boolean; worker_running: boolean;
-  budget_microusd: number; spent_microusd: number; reserved_microusd: number; uncertain_microusd: number; available_microusd: number;
+  spent_microusd: number; reserved_microusd: number; uncertain_microusd: number;
 };
 export type RoutingPolicy = { strategy: "recommended" | "cheapest" | "latency" | "throughput"; zdr: boolean; region: "global" | "us" | "eu" };
 export type ModelAttempt = {
@@ -161,7 +161,8 @@ export type ModelRun = {
     message_ids?: string[]; step?: number | null;
     /** For tool events: what the call did, in a short phrase ("searched arXiv for “x” · 4 results"). */
     detail?: string }[];
-  answer_state?: { status: "working" | "waiting" | "partial" | "response_ready"; reason?: string | null;
+  /** "continued": the run waited and the server then handed its work to next_run, which carries the answer. */
+  answer_state?: { status: "working" | "waiting" | "continued" | "partial" | "response_ready"; reason?: string | null; next_run?: string;
     checkpoint?: { summary: string; remaining?: string; sources?: string[] } | null } | null;
   diagnostics?: ProviderDiagnostics | null;
   usage?: MessageUsage;
@@ -313,6 +314,9 @@ export function authorLabel(message: Message, members: Member[]): string {
   if (message.author_kind === "bot") return "Bot · " + (message.bot_name ?? "Bot");
   return members.find((member) => member.id === message.author_id)?.name ?? "Departed member";
 }
+/** Whether you wrote a message yourself: a model or bot reply you asked for is not yours. */
+export const isOwnMessage = (message: Pick<Message, "author_id" | "author_kind">, userId: string) =>
+  (message.author_kind ?? "human") === "human" && message.author_id === userId;
 export const aborted = (error: unknown) => error instanceof Error && error.name === "AbortError";
 
 /**
@@ -335,7 +339,7 @@ export function mergeMessages(existing: Message[], incoming: Message[]): Message
 
 export function mentionText(content: string, members: Pick<Member, "id" | "name">[]): string {
   const names = new Map(members.map((member) => [member.id, member.name]));
-  return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]/g,
+  return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99}(?:\[(?:1m|200k)\])?)(?:!(low|medium|high|xhigh|max|ultra))?)?\]/g,
     (_match, id: string, model?: string, effort?: string) => "@" + (names.get(id) ?? "departed member")
       + (model ? "-" + model : "") + (effort ? "!" + effort : ""));
 }
@@ -355,7 +359,7 @@ export function mentionQuery(content: string, cursor: number, botNames: string[]
 
 export function mentionMarkdown(content: string, members: Pick<Member, "id" | "name">[]): string {
   const names = new Map(members.map((member) => [member.id, member.name]));
-  return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99})(?:!(low|medium|high|xhigh|max))?)?\]/g,
+  return content.replace(/@\[([a-f0-9]{32})(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,99}(?:\[(?:1m|200k)\])?)(?:!(low|medium|high|xhigh|max|ultra))?)?\]/g,
     (_match, id: string, model?: string, effort?: string) => {
     const name = (names.get(id) ?? "departed member").replace(/[\r\n]/g, " ").replace(/[\\`*_{}\[\]()#+.!<>~$]/g, "\\$&");
     // A link to `#mention/ID`, rendered as a tinted mention; the label stays escaped text.
